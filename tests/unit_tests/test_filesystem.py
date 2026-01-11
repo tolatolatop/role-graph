@@ -121,18 +121,26 @@ def test_all_fs_opt(root_temp_path: Path) -> None:
     assert fs.read_file(op) == "test content 1"
 
     # patch the test file
-    # op = FSOperation(
-    #     operation="patch",
-    #     path=root_temp_path / "test1.txt",
-    #     content="test content 1 patched",
-    # )
-    # assert fs.patch_file(op) == "Content patched to file 'test1.txt'"
+    patch_content = """--- test1.txt       2026-01-11 10:53:58.947771242 +0000
++++ test1.txt       2026-01-11 10:54:09.072830904 +0000
+@@ -1 +1 @@
+-test content 1
+\ No newline at end of file
++test content 1 patched
+\ No newline at end of file
+"""
+    op = FSOperation(
+        operation="patch",
+        path=root_temp_path / "test1.txt",
+        content=patch_content,
+    )
+    assert fs.patch_file(op) == "Content patched to file 'test1.txt'"
 
     # replace the test file
     op = FSOperation(
         operation="replace",
         path=root_temp_path / "test1.txt",
-        replace_pattern="test content 1",
+        replace_pattern="test content 1 patched",
         glob_pattern="test1.txt",
         content="test content 1 replaced",
     )

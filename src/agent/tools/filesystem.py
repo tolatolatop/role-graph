@@ -5,6 +5,7 @@ from __future__ import annotations
 import glob as glob_module
 import re
 from pathlib import Path
+import subprocess as sp
 from typing import Literal
 
 from langchain.tools import tool
@@ -251,8 +252,13 @@ def patch_file(operation: FSOperation) -> str:
 
     try:
         # patch 操作通常是在文件末尾追加内容
-        with file_path.open("a", encoding="utf-8") as f:
-            f.write(operation.content)
+        cmd = ["patch", "-p", "0"]
+        proc = sp.Popen(cmd, stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.STDOUT)
+        proc.stdin.write(operation.content.encode("utf-8"))
+        proc.stdin.close()
+        stdout, _ = proc.communicate(timeout=10)
+        if proc.returncode != 0:
+            return f"Error: Failed to patch file '{operation.path}': {stdout.decode('utf-8', errors='ignore')}"
         return f"Content patched to file '{operation.path}'"
     except Exception as e:
         return f"Error patching file '{operation.path}': {str(e)}"
