@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from langchain.tools import tool
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 
 operation_types = Literal[
     "read", "write", "delete", "search", "glob", "patch", "list", "replace"
@@ -102,6 +102,13 @@ class FSOperation(BaseModel):
             raise ValueError("replace_pattern is required for 'replace' operation")
 
         return self
+
+    @field_validator("path", mode="before")
+    def validate_path(cls, v) -> FSOperation:
+        """Validate path."""
+        if isinstance(v, Path):
+            return v.as_posix()
+        return v
 
 
 @tool(args_schema=FSOperation)
