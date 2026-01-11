@@ -17,6 +17,7 @@ def test_get_user_email_with_runtime() -> None:
         user_tools.get_user_email.invoke(
             {
                 "user_id": "test_user",
+                "other_args": {},
                 "runtime": runtime,
             }
         )
