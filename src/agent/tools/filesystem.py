@@ -182,7 +182,7 @@ def search_file(operation: FSOperation) -> str:
     """Search the content of the file."""
     if not operation.path:
         # 如果没有指定路径，在当前工作目录递归搜索
-        search_path = Path.cwd()
+        search_path = Path(".")
         results = []
         try:
             pattern = re.compile(operation.query)

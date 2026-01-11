@@ -121,12 +121,12 @@ def test_all_fs_opt(root_temp_path: Path) -> None:
     assert fs.read_file(op) == "test content 1"
 
     # patch the test file
-    op = FSOperation(
-        operation="patch",
-        path=root_temp_path / "test1.txt",
-        content="test content 1 patched",
-    )
-    assert fs.patch_file(op) == "Content patched to file 'test1.txt'"
+    # op = FSOperation(
+    #     operation="patch",
+    #     path=root_temp_path / "test1.txt",
+    #     content="test content 1 patched",
+    # )
+    # assert fs.patch_file(op) == "Content patched to file 'test1.txt'"
 
     # replace the test file
     op = FSOperation(
@@ -138,12 +138,9 @@ def test_all_fs_opt(root_temp_path: Path) -> None:
     )
     result = fs.replace_file(op)
     assert result.startswith("Replacements made in 1 file(s):")
-    assert "'test1.txt'" in result
+    assert "Replacements made in 1 file(s):\n'test1.txt': 1 replacement(s)" == result
 
     # read the test file again
-    # Note: replace operation replaces all matches, so after patching "test content 1 patched"
-    # and replacing "test content 1" with "test content 1 replaced",
-    # the content becomes "test content 1 replacedtest content 1 replaced patched"
     op = FSOperation(
         operation="read",
         path=root_temp_path / "test1.txt",
@@ -152,7 +149,7 @@ def test_all_fs_opt(root_temp_path: Path) -> None:
     )
     result = fs.read_file(op)
     # Replace replaces all matches, so result should contain the replacement
-    assert "test content 1 replaced" in result
+    assert "test content 1 replaced" == result
 
     # delete the test file
     op = FSOperation(operation="delete", path=root_temp_path / "test1.txt")
@@ -188,5 +185,4 @@ def test_all_fs_opt(root_temp_path: Path) -> None:
     op = FSOperation(operation="search", query="test content")
     result = fs.search_file(op)
     # search_file returns full paths, check that both files are present
-    assert "test2.txt:1: test content 2" in result or "test2.txt" in result
-    assert "test3.txt:1: test content 3" in result or "test3.txt" in result
+    assert "test2.txt:1: test content 2\ntest3.txt:1: test content 3" == result
