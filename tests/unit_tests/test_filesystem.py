@@ -37,10 +37,15 @@ def test_fsoperation_validation() -> None:
     with pytest.raises(ValueError):
         FSOperation(operation="search", path="", query="")
 
-    op = FSOperation(operation="read", path="test.txt")
+    with pytest.raises(ValueError):
+        FSOperation(operation="replace", replace_pattern=None)
+
+    op = FSOperation(operation="read", path="test.txt", read_offset=1, read_length=1)
     assert op.operation == "read"
 
-    op = FSOperation(operation="write", path="test.txt", content="test content")
+    op = FSOperation(
+        operation="write", path="test.txt", content="test content", write_append=True
+    )
     assert op.operation == "write"
 
     op = FSOperation(operation="patch", path="test.txt", content="test content")
@@ -57,3 +62,11 @@ def test_fsoperation_validation() -> None:
 
     op = FSOperation(operation="delete", path="test.txt")
     assert op.operation == "delete"
+
+    op = FSOperation(
+        operation="replace",
+        replace_pattern="test",
+        glob_pattern="test.txt",
+        content="test content",
+    )
+    assert op.operation == "replace"
