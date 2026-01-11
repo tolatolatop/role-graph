@@ -1,5 +1,5 @@
 """Entry point for the agent."""
 
-from agent.role_graph import standalone_graph
+from agent.role_graph import wizard_graph
 
-graph = standalone_graph
+graph = wizard_graph
