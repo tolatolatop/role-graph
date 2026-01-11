@@ -1,6 +1,13 @@
+#!/usr/bin/env python3
+"""测试 LangGraph 的流式输出.
+
+通过 GenericFakeChatModel 模拟 LLM 的流式输出，用于测试 LangGraph 的流式输出。
+"""
+
 import asyncio
-from langchain_core.messages import AIMessage, ToolCall
+
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage, ToolCall
 
 # 预定义响应序列 - 可控输出
 fake_responses = iter(
@@ -22,6 +29,7 @@ fakellm = GenericFakeChatModel(messages=fake_responses)
 # 测试非流式
 result = fakellm.invoke([("human", "测试 graph")])
 print(result)  # 第一条响应（带工具调用）
+print("--------------------------------")
 
 
 # 测试流式输出
