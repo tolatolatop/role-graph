@@ -59,12 +59,12 @@ class FSOperation(BaseModel):
 
     read_offset: int | None = Field(
         None,
-        description="The offset to read from the file. Required for read operation.",
+        description="The offset line number to read from the file. Required for read operation.",
     )
 
     read_length: int | None = Field(
         None,
-        description="The length to read from the file. Required for read operation.",
+        description="The length of lines to read from the file. Required for read operation.",
     )
 
     write_append: bool | None = Field(
@@ -128,9 +128,10 @@ def read_file(operation: FSOperation) -> str:
 
     try:
         with file_path.open("r", encoding="utf-8") as f:
-            f.seek(operation.read_offset)
-            content = f.read(operation.read_length)
-            return content
+            for _ in range(operation.read_offset):
+                f.readline()
+            content = f.readlines(operation.read_length)
+            return "\n".join(content)
     except Exception as e:
         return f"Error reading file '{operation.path}': {str(e)}"
 
