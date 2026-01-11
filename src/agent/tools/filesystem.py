@@ -32,10 +32,8 @@ list: List recursively the file or directory.
 """
 
 
-class FSOperation(BaseModel):
+class FSOperationArgs(BaseModel):
     """Filesystem operation."""
-
-    operation: operation_types = Field(..., description=operation_type_descriptions)
 
     path: str | None = Field(
         None,
@@ -74,51 +72,72 @@ class FSOperation(BaseModel):
 
     write_append: bool | None = Field(
         None,
-        description="Whether to append to the file. Required for write operation.",
+        description="Whether to append to the file. **Required for write operation.**",
     )
 
-    @model_validator(mode="after")
-    def validate_required_fields(self) -> FSOperation:
-        """Validate required fields based on operation."""
-        op = self.operation
-
-        if op in ("read", "write", "delete", "patch", "list") and not self.path:
-            raise ValueError(f"path is required for '{op}' operation")
-
-        if op == "read" and (self.read_offset is None or self.read_length is None):
-            raise ValueError(
-                "read_offset and read_length are required for 'read' operation"
-            )
-
-        if op == "write" and self.write_append is None:
-            raise ValueError("write_append is required for 'write' operation")
-
-        if op == "search" and not self.query:
-            raise ValueError("query is required for 'search' operation")
-
-        if op in ("glob", "replace") and not self.glob_pattern:
-            raise ValueError("glob_pattern is required for 'glob' operation")
-
-        if op in ("write", "patch", "replace") and self.content is None:
-            # 允许 content=""（空字符串）作为合法内容，因此用 is None 判断
-            raise ValueError(f"content is required for '{op}' operation")
-
-        if op == "replace" and self.replace_pattern is None:
-            raise ValueError("replace_pattern is required for 'replace' operation")
-
-        return self
-
     @field_validator("path", mode="before")
-    def validate_path(cls, v) -> FSOperation:
+    def validate_path(cls, v) -> str:
         """Validate path."""
         if isinstance(v, Path):
             return v.as_posix()
         return v
 
 
+class FSOperation(BaseModel):
+    """Filesystem operation."""
+
+    operation: operation_types = Field(..., description=operation_type_descriptions)
+    args: FSOperationArgs = Field(
+        ..., description="The arguments for the filesystem operation."
+    )
+
+    @model_validator(mode="after")
+    def validate(self) -> FSOperation:
+        """Validate required fields based on operation."""
+        op = self.operation
+
+        if op in ("read", "write", "delete", "patch", "list") and not self.args.path:
+            raise ValueError(f"path is required for '{op}' operation")
+
+        if op == "read" and (
+            self.args.read_offset is None or self.args.read_length is None
+        ):
+            raise ValueError(
+                "read_offset and read_length are required for 'read' operation"
+            )
+
+        if op == "write" and self.args.write_append is None:
+            raise ValueError("write_append is required for 'write' operation")
+
+        if op == "search" and not self.args.query:
+            raise ValueError("query is required for 'search' operation")
+
+        if op in ("glob", "replace") and not self.args.glob_pattern:
+            raise ValueError("glob_pattern is required for 'glob' operation")
+
+        if op in ("write", "patch", "replace") and self.args.content is None:
+            # 允许 content=""（空字符串）作为合法内容，因此用 is None 判断
+            raise ValueError(f"content is required for '{op}' operation")
+
+        if op == "replace" and self.args.replace_pattern is None:
+            raise ValueError("replace_pattern is required for 'replace' operation")
+
+        return self
+
+
 @tool(args_schema=FSOperation)
-def fs_opt(operation: FSOperation, runtime: ToolRuntime[UserContext]) -> str:
+def fs_opt(
+    operation: operation_types,
+    args: FSOperation,
+    runtime: ToolRuntime[UserContext],
+) -> str:
     """Perform a filesystem operation."""
+    if runtime is None:
+        raise ValueError("runtime is required")
+    operation = FSOperation(
+        operation=operation,
+        args=args,
+    )
     path = Path("user_data") / runtime.context.user_id
     if not path.exists():
         path.mkdir(parents=True, exist_ok=True)
