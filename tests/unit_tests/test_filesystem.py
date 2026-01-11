@@ -1,6 +1,7 @@
 """Test the filesystem tools."""
 
 import os
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -13,75 +14,83 @@ from agent.tools.filesystem import FSOperation
 def test_fsoperation_validation() -> None:
     """Test the validation of the FSOperation."""
     with pytest.raises(ValueError):
-        FSOperation(operation="read", path=None)
+        FSOperation(operation="read", args={})
 
     with pytest.raises(ValueError):
-        FSOperation(operation="write", content=None)
+        FSOperation(operation="write", args={})
 
     with pytest.raises(ValueError):
-        FSOperation(operation="patch", content=None)
+        FSOperation(operation="patch", args={})
 
     with pytest.raises(ValueError):
-        FSOperation(operation="search", query=None)
+        FSOperation(operation="search", args={})
 
     with pytest.raises(ValueError):
-        FSOperation(operation="glob", glob_pattern=None)
+        FSOperation(operation="glob", args={})
 
     with pytest.raises(ValueError):
-        FSOperation(operation="list", path=None)
+        FSOperation(operation="list", args={})
 
     with pytest.raises(ValueError):
-        FSOperation(operation="read", path="", query="", glob_pattern="", content="")
+        FSOperation(
+            operation="read",
+            args={"path": "", "query": "", "glob_pattern": "", "content": ""},
+        )
 
     with pytest.raises(ValueError):
-        FSOperation(operation="write", path="", content="")
+        FSOperation(operation="write", args={"path": "", "content": ""})
 
     with pytest.raises(ValueError):
-        FSOperation(operation="patch", path="", content="")
+        FSOperation(operation="patch", args={"path": "", "content": ""})
 
     with pytest.raises(ValueError):
         FSOperation(operation="search", path="", query="")
 
     with pytest.raises(ValueError):
-        FSOperation(operation="replace", replace_pattern=None)
+        FSOperation(operation="replace", args={})
 
-    op = FSOperation(operation="read", path="test.txt", read_offset=1, read_length=1)
+    op = FSOperation(
+        operation="read", args={"path": "test.txt", "read_offset": 1, "read_length": 1}
+    )
     assert op.operation == "read"
 
     op = FSOperation(
-        operation="write", path="test.txt", content="test content", write_append=True
+        operation="write",
+        args={"path": "test.txt", "content": "test content", "write_append": True},
     )
     assert op.operation == "write"
 
-    op = FSOperation(operation="patch", path="test.txt", content="test content")
+    op = FSOperation(
+        operation="patch", args={"path": "test.txt", "content": "test content"}
+    )
     assert op.operation == "patch"
 
-    op = FSOperation(operation="search", query="test")
+    op = FSOperation(operation="search", args={"query": "test"})
     assert op.operation == "search"
 
-    op = FSOperation(operation="glob", glob_pattern="test.txt")
+    op = FSOperation(operation="glob", args={"glob_pattern": "test.txt"})
     assert op.operation == "glob"
 
-    op = FSOperation(operation="list", path="test.txt")
+    op = FSOperation(operation="list", args={"path": "test.txt"})
     assert op.operation == "list"
 
-    op = FSOperation(operation="delete", path="test.txt")
+    op = FSOperation(operation="delete", args={"path": "test.txt"})
     assert op.operation == "delete"
 
     op = FSOperation(
         operation="replace",
-        replace_pattern="test",
-        glob_pattern="test.txt",
-        content="test content",
+        args={
+            "replace_pattern": "test",
+            "glob_pattern": "test.txt",
+            "content": "test content",
+        },
     )
     assert op.operation == "replace"
 
 
 @pytest.fixture
 def root_temp_path():
-    """
-    只是一个测试专用的简化上下文，在正式使用时需要配合其他方法保证路径正确。
-    """
+    """Root temporary path."""
     with TemporaryDirectory() as temp_dir:
         cwd = os.getcwd()
         os.chdir(temp_dir)
