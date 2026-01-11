@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import glob as glob_module
+import re
+from pathlib import Path
 from typing import Literal
 
+from langchain.tools import tool
 from pydantic import BaseModel, Field, model_validator
 
 operation_types = Literal[
     "read", "write", "delete", "search", "glob", "patch", "list", "replace"
 ]
+
+NEED_WRITE_PERMISSION_TYPES = ("write", "patch", "replace")
 
 operation_type_descriptions = """The operation to perform. One of:
 read: Read the content of the file.
@@ -96,3 +102,239 @@ class FSOperation(BaseModel):
             raise ValueError("replace_pattern is required for 'replace' operation")
 
         return self
+
+
+@tool(args_schema=FSOperation)
+def fs_opt(operation: FSOperation) -> str:
+    """Perform a filesystem operation."""
+    opt_map = {
+        "read": read_file,
+        "write": write_file,
+        "delete": delete_file,
+        "search": search_file,
+        "glob": glob_file,
+        "patch": patch_file,
+        "list": list_file,
+        "replace": replace_file,
+    }
+    return opt_map[operation.operation](operation)
+
+
+def read_file(operation: FSOperation) -> str:
+    """Read the content of the file."""
+    file_path = Path(operation.path)
+    if not file_path.exists():
+        return f"Error: File '{operation.path}' does not exist"
+
+    try:
+        with file_path.open("r", encoding="utf-8") as f:
+            f.seek(operation.read_offset)
+            content = f.read(operation.read_length)
+            return content
+    except Exception as e:
+        return f"Error reading file '{operation.path}': {str(e)}"
+
+
+def write_file(operation: FSOperation) -> str:
+    """Write the content to the file."""
+    file_path = Path(operation.path)
+    try:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        mode = "a" if operation.write_append else "w"
+        with file_path.open(mode, encoding="utf-8") as f:
+            f.write(operation.content)
+        action = "appended to" if operation.write_append else "written to"
+        return f"Content {action} file '{operation.path}'"
+    except Exception as e:
+        return f"Error writing file '{operation.path}': {str(e)}"
+
+
+def delete_file(operation: FSOperation) -> str:
+    """Delete the file."""
+    file_path = Path(operation.path)
+    if not file_path.exists():
+        return f"Error: File '{operation.path}' does not exist"
+
+    try:
+        if file_path.is_file():
+            file_path.unlink()
+            return f"File '{operation.path}' deleted successfully"
+        elif file_path.is_dir():
+            import shutil
+
+            shutil.rmtree(file_path)
+            return f"Directory '{operation.path}' deleted successfully"
+        else:
+            return f"Error: '{operation.path}' is neither a file nor a directory"
+    except Exception as e:
+        return f"Error deleting '{operation.path}': {str(e)}"
+
+
+def search_file(operation: FSOperation) -> str:
+    """Search the content of the file."""
+    if not operation.path:
+        # 如果没有指定路径，在当前工作目录递归搜索
+        search_path = Path.cwd()
+        results = []
+        try:
+            pattern = re.compile(operation.query)
+            for file_path in search_path.rglob("*"):
+                if file_path.is_file():
+                    try:
+                        with file_path.open(
+                            "r", encoding="utf-8", errors="ignore"
+                        ) as f:
+                            for line_num, line in enumerate(f, 1):
+                                if pattern.search(line):
+                                    results.append(
+                                        f"{file_path}:{line_num}: {line.strip()}"
+                                    )
+                    except Exception:
+                        continue
+        except re.error as e:
+            return f"Error: Invalid regex pattern '{operation.query}': {str(e)}"
+        except Exception as e:
+            return f"Error searching files: {str(e)}"
+
+        if results:
+            return "\n".join(results)
+        else:
+            return f"No matches found for pattern '{operation.query}'"
+    else:
+        # 在指定文件中搜索
+        file_path = Path(operation.path)
+        if not file_path.exists():
+            return f"Error: File '{operation.path}' does not exist"
+
+        try:
+            pattern = re.compile(operation.query)
+            matches = []
+            with file_path.open("r", encoding="utf-8", errors="ignore") as f:
+                for line_num, line in enumerate(f, 1):
+                    if pattern.search(line):
+                        matches.append(f"{line_num}: {line.strip()}")
+            if matches:
+                return "\n".join(matches)
+            else:
+                return f"No matches found for pattern '{operation.query}' in '{operation.path}'"
+        except re.error as e:
+            return f"Error: Invalid regex pattern '{operation.query}': {str(e)}"
+        except Exception as e:
+            return f"Error searching file '{operation.path}': {str(e)}"
+
+
+def glob_file(operation: FSOperation) -> str:
+    """Glob the file."""
+    try:
+        matches = sorted(glob_module.glob(operation.glob_pattern, recursive=True))
+        if matches:
+            return "\n".join(matches)
+        else:
+            return f"No files matched pattern '{operation.glob_pattern}'"
+    except Exception as e:
+        return f"Error globbing pattern '{operation.glob_pattern}': {str(e)}"
+
+
+def patch_file(operation: FSOperation) -> str:
+    """Patch the content of the file."""
+    file_path = Path(operation.path)
+    if not file_path.exists():
+        return f"Error: File '{operation.path}' does not exist"
+
+    try:
+        # patch 操作通常是在文件末尾追加内容
+        with file_path.open("a", encoding="utf-8") as f:
+            f.write(operation.content)
+        return f"Content patched to file '{operation.path}'"
+    except Exception as e:
+        return f"Error patching file '{operation.path}': {str(e)}"
+
+
+def list_file(operation: FSOperation) -> str:
+    """List the content of the file."""
+    file_path = Path(operation.path)
+    if not file_path.exists():
+        return f"Error: Path '{operation.path}' does not exist"
+
+    try:
+        if file_path.is_file():
+            return f"File: {operation.path}\nSize: {file_path.stat().st_size} bytes"
+        elif file_path.is_dir():
+            items = []
+
+            def _list_recursive(path: Path, prefix: str = "") -> None:
+                """Recursively list directory contents."""
+                try:
+                    entries = sorted(path.iterdir())
+                    for i, item in enumerate(entries):
+                        is_last = i == len(entries) - 1
+                        current_prefix = "└── " if is_last else "├── "
+                        full_prefix = prefix + current_prefix
+
+                        if item.is_file():
+                            size = item.stat().st_size
+                            items.append(f"{full_prefix}{item.name} ({size} bytes)")
+                        elif item.is_dir():
+                            items.append(f"{full_prefix}{item.name}/")
+                            next_prefix = prefix + ("    " if is_last else "│   ")
+                            _list_recursive(item, next_prefix)
+                        else:
+                            items.append(f"{full_prefix}{item.name} (?)")
+                except PermissionError:
+                    items.append(f"{prefix}[Permission denied]")
+
+            _list_recursive(file_path)
+            if items:
+                return f"Directory: {operation.path}\n" + "\n".join(items)
+            else:
+                return f"Directory: {operation.path}\n(empty)"
+        else:
+            return f"Error: '{operation.path}' is neither a file nor a directory"
+    except Exception as e:
+        return f"Error listing '{operation.path}': {str(e)}"
+
+
+def replace_file(operation: FSOperation) -> str:
+    """Replace the content of the file."""
+    try:
+        # 使用 glob_pattern 查找文件
+        matched_files = sorted(glob_module.glob(operation.glob_pattern, recursive=True))
+        if not matched_files:
+            return f"No files matched pattern '{operation.glob_pattern}'"
+
+        pattern = re.compile(operation.replace_pattern)
+        results = []
+        total_replacements = 0
+
+        for file_path_str in matched_files:
+            file_path = Path(file_path_str)
+            if not file_path.is_file():
+                continue
+
+            try:
+                with file_path.open("r", encoding="utf-8") as f:
+                    original_content = f.read()
+
+                new_content, count = pattern.subn(operation.content, original_content)
+
+                if count > 0:
+                    with file_path.open("w", encoding="utf-8") as f:
+                        f.write(new_content)
+                    results.append(f"'{file_path_str}': {count} replacement(s)")
+                    total_replacements += count
+                else:
+                    results.append(f"'{file_path_str}': No matches found")
+            except Exception as e:
+                results.append(f"'{file_path_str}': Error - {str(e)}")
+
+        if total_replacements > 0:
+            return (
+                f"Replacements made in {len([r for r in results if 'replacement(s)' in r])} file(s):\n"
+                + "\n".join(results)
+            )
+        else:
+            return "No replacements made:\n" + "\n".join(results)
+    except re.error as e:
+        return f"Error: Invalid regex pattern '{operation.replace_pattern}': {str(e)}"
+    except Exception as e:
+        return f"Error replacing in files: {str(e)}"
