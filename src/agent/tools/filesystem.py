@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import glob as glob_module
+import multiprocessing as mp
+import os
 import re
-from pathlib import Path
 import subprocess as sp
+from pathlib import Path
 from typing import Literal
 
-from langchain.tools import tool
-from pydantic import BaseModel, Field, model_validator, field_validator
+from langchain.tools import ToolRuntime, tool
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from agent.role.context import UserContext
 
 operation_types = Literal[
     "read", "write", "delete", "search", "glob", "patch", "list", "replace"
@@ -113,8 +117,17 @@ class FSOperation(BaseModel):
 
 
 @tool(args_schema=FSOperation)
-def fs_opt(operation: FSOperation) -> str:
+def fs_opt(operation: FSOperation, runtime: ToolRuntime[UserContext]) -> str:
     """Perform a filesystem operation."""
+    path = Path("user_data") / runtime.context.user_id
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+    return mp.Pool(processes=1).apply(_fs_opt, (operation, path))
+
+
+def _fs_opt(operation: FSOperation, cwd: Path) -> str:
+    """Perform a filesystem operation."""
+    os.chdir(cwd)
     opt_map = {
         "read": read_file,
         "write": write_file,
