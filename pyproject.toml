@@ -9,7 +9,7 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.13"
 dependencies = [
-    "langchain[google-genai]>=1.2.3",
+    "langchain[google-genai,openai]>=1.2.3",
     "langgraph>=1.0.0",
     "pip>=25.3",
     "python-dotenv>=1.0.1",
