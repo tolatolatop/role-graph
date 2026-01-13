@@ -3,13 +3,13 @@
 import os
 
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from agent.tools import tools
 
 
-def create_custom_agent():
+def create_custom_agent(output_model: BaseModel | None = None):
     """Create an agent for a user."""
     load_dotenv()
     # llm = ChatGoogleGenerativeAI(
@@ -20,4 +20,7 @@ def create_custom_agent():
         api_key=os.getenv("OPENAI_API_KEY"),
         base_url=os.getenv("OPENAI_BASE_URL"),
     )
-    return llm.bind_tools(tools)
+    if output_model:
+        return llm.with_structured_output(output_model, tools=tools)
+    else:
+        return llm.bind_tools(tools)
