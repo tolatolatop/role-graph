@@ -154,6 +154,33 @@ goal_prompt = """
 """
 
 
+meta_prompt = """
+# Role: 资深提示词工程师 (Senior Prompt Engineer)
+
+## Profile
+你是一位精通大语言模型（LLM）底层逻辑的专家。你擅长将简单的用户意图转化为结构严谨、逻辑清晰的专业提示词（Prompt）。
+
+## Goals
+接收用户的【意图】和【背景信息】，直接输出一个优化后的结构化提示词。
+
+## Workflow
+1.  **分析与重构**：基于用户输入，补充必要的背景、角色设定、任务目标和约束条件。
+2.  **结构化撰写**：按照 Role (角色) -> Context (背景) -> Task (任务) -> Constraints (约束) -> Format (格式) 的标准框架撰写。
+3.  **输出清理**：移除所有对话、寒暄、解释性文字，仅保留最终结果。
+
+## Constraints
+* **绝对禁止**在输出中包含任何开场白（如“好的”、“这是为您生成的...”）或结尾语。
+* **绝对禁止**解释你做了哪些优化。
+* **唯一输出**：只输出一个 Markdown 代码块，其中包含最终的提示词内容。
+* 生成的提示词必须包含：Role, Context, Task, Constraints, Workflow (如有必要) 等板块。
+
+## Interaction Format
+1.  用户输入需求。
+2.  你直接输出代码块。**（DO NOT output anything else outside the code block）**
+
+"""
+
+
 class Question(BaseModel):
     """Question for the agent."""
 
@@ -193,6 +220,7 @@ class State(MessagesState):
     answers: Annotated[List[str], add_answers] = Field(
         description="答案", default_factory=list
     )
+    plan_prompt: str = Field(description="计划提示词", default="")
 
 
 def analyze_user_goal(state: State):
@@ -220,11 +248,20 @@ def human_answer(state: State):
     }
 
 
-def human_answers_loop(state: State) -> Command[Literal["human_answer", END]]:
+def human_answers_loop(
+    state: State,
+) -> Command[Literal["human_answer", "update_user_goal"]]:
     """Human answers loop."""
     if len(state["answers"]) < len(state["exam"].questions):
         return Command(goto="human_answer")
-    return Command(goto=END)
+    return Command(goto="update_user_goal")
+
+
+def generate_plan_prompt(state: State):
+    """Generate a plan prompt."""
+    llm = create_custom_agent()
+    msg = llm.invoke([SystemMessage(content=meta_prompt)] + state["messages"])
+    return {"plan_prompt": msg.content, "messages": [msg]}
 
 
 enhance_prompt_builder = StateGraph(State)
@@ -232,10 +269,13 @@ enhance_prompt_builder.add_node("analyze_user_goal", analyze_user_goal)
 enhance_prompt_builder.add_node("generate_exam", generate_exam)
 enhance_prompt_builder.add_node("human_answer", human_answer)
 enhance_prompt_builder.add_node("human_answers_loop", human_answers_loop)
+enhance_prompt_builder.add_node("plan_prompt", generate_plan_prompt)
+enhance_prompt_builder.add_node("update_user_goal", analyze_user_goal)
 enhance_prompt_builder.add_edge(START, "analyze_user_goal")
 enhance_prompt_builder.add_edge("analyze_user_goal", "generate_exam")
 enhance_prompt_builder.add_edge("generate_exam", "human_answers_loop")
 enhance_prompt_builder.add_conditional_edges("human_answers_loop", human_answers_loop)
 enhance_prompt_builder.add_edge("human_answer", "human_answers_loop")
+enhance_prompt_builder.add_edge("update_user_goal", END)
 
 graph = enhance_prompt_builder.compile()
