@@ -214,6 +214,17 @@ class Exam(BaseModel):
         exam_left.questions.extend(exam_right.questions)
         return exam_left
 
+    def __str__(self):
+        """String representation of the Exam."""
+        return "\n".join([str(question) for question in self.questions])
+
+
+class Diff(BaseModel):
+    """Diff for the agent."""
+
+    is_same: bool = Field(description="是否相同")
+    diff_reason: str = Field(description="差异原因")
+
 
 def add_answers(anwsers_left: List[str], anwsers_right: List[str]):
     """Add an answer to the state."""
@@ -287,13 +298,43 @@ def test_user_goal(state: State):
     return {"messages": [AIMessage(content=str(answers_list))]}
 
 
+def compare_answers(state: State) -> Command[Literal[END, "update_user_goal"]]:
+    """Compare the answers."""
+    llm = create_custom_agent(Diff)
+    diff: Diff = llm.invoke(
+        [
+            AIMessage(content=f"{state['exam']}"),
+            HumanMessage(content=f"{state['answers']}"),
+            state["messages"][-1],
+            HumanMessage(content="比较用户和AI的答案"),
+        ]
+    )
+    if diff.is_same:
+        return Command(goto="END")
+    return Command(
+        goto="update_user_goal",
+        update={"messages": [HumanMessage(content=f"差异:{diff.diff_reason}")]},
+    )
+
+
+def update_user_goal(state: State):
+    """Update the user goal."""
+    llm = create_custom_agent()
+    msg = llm.invoke(
+        [SystemMessage(content=goal_prompt)]
+        + state["messages"]
+        + [HumanMessage(content="根据提示重新完整生成用户意图")]
+    )
+    return {"user_goal": msg.content, "messages": [msg]}
+
+
 def router_node(
     state: State,
-) -> Command[Literal["analyze_user_goal", "update_user_goal"]]:
+) -> Command[Literal["analyze_user_goal", "test_user_goal"]]:
     """Router node."""
-    if state["user_goal"] == "":
+    if state.get("user_goal") is None:
         return Command(goto="analyze_user_goal")
-    return Command(goto="update_user_goal")
+    return Command(goto="test_user_goal")
 
 
 enhance_prompt_builder = StateGraph(State)
@@ -303,14 +344,17 @@ enhance_prompt_builder.add_node("generate_exam", generate_exam)
 enhance_prompt_builder.add_node("human_answer", human_answer)
 enhance_prompt_builder.add_node("human_answers_loop", human_answers_loop)
 enhance_prompt_builder.add_node("plan_prompt", generate_plan_prompt)
-enhance_prompt_builder.add_node("update_user_goal", analyze_user_goal)
+enhance_prompt_builder.add_node("update_user_goal", update_user_goal)
 enhance_prompt_builder.add_node("test_user_goal", test_user_goal)
+enhance_prompt_builder.add_node("compare_answers", compare_answers)
 enhance_prompt_builder.add_edge(START, "router_node")
 enhance_prompt_builder.add_edge("analyze_user_goal", "generate_exam")
 enhance_prompt_builder.add_edge("generate_exam", "human_answers_loop")
 enhance_prompt_builder.add_conditional_edges("human_answers_loop", human_answers_loop)
 enhance_prompt_builder.add_edge("human_answer", "human_answers_loop")
 enhance_prompt_builder.add_edge("update_user_goal", "test_user_goal")
-enhance_prompt_builder.add_edge("test_user_goal", END)
+enhance_prompt_builder.add_edge("test_user_goal", "compare_answers")
+enhance_prompt_builder.add_conditional_edges("compare_answers", compare_answers)
+enhance_prompt_builder.add_edge("compare_answers", END)
 
 graph = enhance_prompt_builder.compile()
