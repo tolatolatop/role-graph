@@ -1,8 +1,8 @@
 """Subagents for the agent."""
 
-from typing import Dict, List
+from typing import Dict, List, Annotated
 
-from langchain.messages import HumanMessage, SystemMessage
+from langchain.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
@@ -154,10 +154,40 @@ goal_prompt = """
 """
 
 
+class Question(BaseModel):
+    """Question for the agent."""
+
+    question: str = Field(description="问题")
+    options: List[str] = Field(description="选项")
+
+
+class Exam(BaseModel):
+    """Exam for the agent."""
+
+    questions: List[Question] = Field(description="问题列表")
+
+    @staticmethod
+    def merge(exam_left: "Exam", exam_right: "Exam"):
+        """Merge two exams."""
+        exam_left.questions.extend(exam_right.questions)
+        return exam_left
+
+
+def add_answers(anwsers_left: List[str], anwsers_right: List[str]):
+    """Add an answer to the state."""
+    return [*anwsers_left, *anwsers_right]
+
+
 class State(MessagesState):
     """State for the agent."""
 
-    user_goal: str = Field(description="用户目标")
+    user_goal: str = Field(description="用户目标", default="")
+    exam: Annotated[Exam, Exam.merge] = Field(
+        description="考试", default=Exam(questions=[])
+    )
+    answers: Annotated[List[str], add_answers] = Field(
+        description="答案", default_factory=list
+    )
 
 
 def analyze_user_goal(state: State):
@@ -167,9 +197,18 @@ def analyze_user_goal(state: State):
     return {"user_goal": msg.content, "messages": [msg]}
 
 
+def generate_exam(state: State):
+    """Generate an exam."""
+    llm = create_custom_agent(Exam)
+    exam: Exam = llm.invoke([SystemMessage(content=exam_prompt)] + state["messages"])
+    return {"exam": exam, "messages": [AIMessage(content=exam.model_dump_json())]}
+
+
 enhance_prompt_builder = StateGraph(State)
 enhance_prompt_builder.add_node("analyze_user_goal", analyze_user_goal)
+enhance_prompt_builder.add_node("generate_exam", generate_exam)
 enhance_prompt_builder.add_edge(START, "analyze_user_goal")
-enhance_prompt_builder.add_edge("analyze_user_goal", END)
+enhance_prompt_builder.add_edge("analyze_user_goal", "generate_exam")
+enhance_prompt_builder.add_edge("generate_exam", END)
 
 graph = enhance_prompt_builder.compile()
