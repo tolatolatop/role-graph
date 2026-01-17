@@ -160,6 +160,11 @@ class Question(BaseModel):
     question: str = Field(description="问题")
     options: List[str] = Field(description="选项")
 
+    def __str__(self):
+        """String representation of the Question."""
+        options_str = "\n".join([f"{option.strip()}" for option in self.options])
+        return f"{self.question}\n{options_str}"
+
 
 class Exam(BaseModel):
     """Exam for the agent."""
@@ -201,14 +206,36 @@ def generate_exam(state: State):
     """Generate an exam."""
     llm = create_custom_agent(Exam)
     exam: Exam = llm.invoke([SystemMessage(content=exam_prompt)] + state["messages"])
-    return {"exam": exam, "messages": [AIMessage(content=exam.model_dump_json())]}
+    return {"exam": exam}
+
+
+def human_answer(state: State):
+    """Get an answer from the state."""
+    index = len(state["answers"])
+    question = state["exam"].questions[index]
+    answer = interrupt(f"请选择一个最符合的答案或者提供新答案\n{question}")
+    return {
+        "answers": [answer],
+        "messages": [AIMessage(content=f"{question}"), HumanMessage(content=answer)],
+    }
+
+
+def human_answers_loop(state: State) -> Command[Literal["human_answer", END]]:
+    """Human answers loop."""
+    if len(state["answers"]) < len(state["exam"].questions):
+        return Command(goto="human_answer")
+    return Command(goto=END)
 
 
 enhance_prompt_builder = StateGraph(State)
 enhance_prompt_builder.add_node("analyze_user_goal", analyze_user_goal)
 enhance_prompt_builder.add_node("generate_exam", generate_exam)
+enhance_prompt_builder.add_node("human_answer", human_answer)
+enhance_prompt_builder.add_node("human_answers_loop", human_answers_loop)
 enhance_prompt_builder.add_edge(START, "analyze_user_goal")
 enhance_prompt_builder.add_edge("analyze_user_goal", "generate_exam")
-enhance_prompt_builder.add_edge("generate_exam", END)
+enhance_prompt_builder.add_edge("generate_exam", "human_answers_loop")
+enhance_prompt_builder.add_conditional_edges("human_answers_loop", human_answers_loop)
+enhance_prompt_builder.add_edge("human_answer", "human_answers_loop")
 
 graph = enhance_prompt_builder.compile()
