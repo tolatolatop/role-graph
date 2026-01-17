@@ -193,6 +193,16 @@ class Question(BaseModel):
         return f"{self.question}\n{options_str}"
 
 
+class AIAnswerList(BaseModel):
+    """AI answer list for the agent."""
+
+    answers: List[str] = Field(description="AI答案列表")
+
+    def __str__(self):
+        """String representation of the AIAnswerList."""
+        return "\n".join([answer.strip() for answer in self.answers])
+
+
 class Exam(BaseModel):
     """Exam for the agent."""
 
@@ -264,18 +274,43 @@ def generate_plan_prompt(state: State):
     return {"plan_prompt": msg.content, "messages": [msg]}
 
 
+def test_user_goal(state: State):
+    """Test the user goal."""
+    llm = create_custom_agent(AIAnswerList)
+    answers_list: AIAnswerList = llm.invoke(
+        [SystemMessage(content=state["user_goal"])]
+        + [
+            HumanMessage(content=f"{state['exam']}"),
+            HumanMessage(content="请根据用户目标和考试内容，生成一个答案列表。"),
+        ]
+    )
+    return {"messages": [AIMessage(content=str(answers_list))]}
+
+
+def router_node(
+    state: State,
+) -> Command[Literal["analyze_user_goal", "update_user_goal"]]:
+    """Router node."""
+    if state["user_goal"] == "":
+        return Command(goto="analyze_user_goal")
+    return Command(goto="update_user_goal")
+
+
 enhance_prompt_builder = StateGraph(State)
+enhance_prompt_builder.add_node("router_node", router_node)
 enhance_prompt_builder.add_node("analyze_user_goal", analyze_user_goal)
 enhance_prompt_builder.add_node("generate_exam", generate_exam)
 enhance_prompt_builder.add_node("human_answer", human_answer)
 enhance_prompt_builder.add_node("human_answers_loop", human_answers_loop)
 enhance_prompt_builder.add_node("plan_prompt", generate_plan_prompt)
 enhance_prompt_builder.add_node("update_user_goal", analyze_user_goal)
-enhance_prompt_builder.add_edge(START, "analyze_user_goal")
+enhance_prompt_builder.add_node("test_user_goal", test_user_goal)
+enhance_prompt_builder.add_edge(START, "router_node")
 enhance_prompt_builder.add_edge("analyze_user_goal", "generate_exam")
 enhance_prompt_builder.add_edge("generate_exam", "human_answers_loop")
 enhance_prompt_builder.add_conditional_edges("human_answers_loop", human_answers_loop)
 enhance_prompt_builder.add_edge("human_answer", "human_answers_loop")
-enhance_prompt_builder.add_edge("update_user_goal", END)
+enhance_prompt_builder.add_edge("update_user_goal", "test_user_goal")
+enhance_prompt_builder.add_edge("test_user_goal", END)
 
 graph = enhance_prompt_builder.compile()
