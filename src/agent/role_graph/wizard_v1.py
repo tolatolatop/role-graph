@@ -63,32 +63,54 @@ prompt_template = ChatPromptTemplate.from_messages(
 
 def router_condition(state: MessagesState) -> Command[ALL_STAGE]:
     """Router node."""
-    pass
+    if state.get("current_stage") is None:
+        return Command(goto="router")
+    elif state["current_stage"] == "router":
+        return Command(goto="research")
+    elif state["current_stage"] == "research":
+        return Command(goto="generator")
+    elif state["current_stage"] == "generator":
+        return Command(goto="compiler")
+    elif state["current_stage"] == "compiler":
+        return Command(goto="lint")
+    elif state["current_stage"] == "lint":
+        return Command(goto="quality")
+    elif state["current_stage"] == "quality":
+        return Command(goto="router")
+    else:
+        return Command(goto=END)
 
 
 def research_node(state: MessagesState):
     """Research node."""
-    pass
+    return Command(goto="generator", update={"research": {"status": "pass"}})
 
 
 def generator_node(state: MessagesState):
     """Generate code node."""
-    pass
+    clear_check_state = {
+        "compile_check": None,
+        "lint_check": None,
+        "quality_check": None,
+    }
+    return Command(
+        goto="compiler", update={"generator": {"status": "pass"}, **clear_check_state}
+    )
 
 
 def compiler_node(state: MessagesState) -> Command[Literal["lint", "router"]]:
     """Compiler node."""
-    pass
+    return Command(goto="lint", update={"compile_check": {"status": "pass"}})
 
 
 def lint_node(state: MessagesState):
     """Lint node."""
-    pass
+    return Command(goto="quality", update={"lint_check": {"status": "pass"}})
 
 
 def quality_check_node(state: MessagesState):
     """Quailty check node."""
-    pass
+    return Command(goto="router", update={"quality_check": {"status": "pass"}})
 
 
 wizard_builder = StateGraph(WizardState)
