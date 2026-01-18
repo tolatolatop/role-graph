@@ -5,14 +5,15 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import Command
-from typing_extensions import Annotated, Literal, TypedDict
+from pydantic import BaseModel, Field
+from typing_extensions import Annotated, List, Literal, TypedDict
 
 from agent.agent import create_custom_agent
 
 
-class CompileCheckState(TypedDict):
-    status: Literal["pass", "fail"]
-    error_messages: Annotated[list[AnyMessage], add_messages]
+class CompileCheckState(BaseModel):
+    status: Literal["pass", "fail"] = Field(default="pass", description="检查结果")
+    error_messages: List[str] = Field(default=[], description="错误信息")
 
 
 class LintCheckState(TypedDict):
@@ -55,11 +56,7 @@ Profile: {profile}
 """
 
 prompt_template = ChatPromptTemplate.from_messages(
-    [
-        ("system", system_prompt_template),
-        MessagesPlaceholder(variable_name="messages"),
-        ("assistant", "{pre_filled_output}"),
-    ]
+    [("system", system_prompt_template), MessagesPlaceholder(variable_name="messages")]
 )
 
 
@@ -78,7 +75,7 @@ def router_condition(state: WizardState) -> Command[ALL_STAGE]:
     elif state["current_stage"] == "lint":
         return Command(goto="quality")
     elif state["current_stage"] == "quality":
-        return Command(goto="router")
+        return Command(goto=END)
     else:
         return Command(goto=END)
 
@@ -96,18 +93,20 @@ def generator_node(state: WizardState):
         "quality_check": None,
     }
     llm = create_custom_agent(use_tools=False)
-    user_input = state.get("messages", [])[-1].content
+    context_asset = state["context_asset"]
     prompt = prompt_template.invoke(
         {
             "role": "小说创作助手",
             "profile": "你是一个小说创作助手，你的任务是根据用户的需求创作小说。",
-            "background": "",
+            "background": "\n".join(
+                ["## Background"] + [f"{msg.content}" for msg in context_asset]
+            ),
             "constraints": "## Constraints:\n- 你只能输出小说内容，不能输出任何其他内容。",
             "workflow": "",
             "standard_output": "",
             "examples": "",
             "messages": state.get("published_content", []),
-            "pre_filled_output": user_input,
+            "pre_filled_output": "",
         }
     )
     msg = llm.invoke(prompt.to_messages())
@@ -123,11 +122,34 @@ def compiler_node(state: WizardState) -> Command[Literal["lint", "router"]]:
     if len(draft) == 0:
         return Command(goto="router", update={"compile_check": {"status": "fail"}})
 
-    msg = draft[-1]
-    return Command(
-        goto="lint",
-        update={"compile_check": {"status": "pass"}, "verify_content": [msg]},
+    context_asset = state["context_asset"]
+    draft = state.get("draft", [])
+    llm = create_custom_agent(use_tools=False, output_model=CompileCheckState)
+    constraints = """## Constraints:
+- 按格式要求输出检查结果。
+- 检查结果必须包含：
+  - 检查结果
+  - 检查理由
+"""
+    prompt = prompt_template.invoke(
+        {
+            "role": "小说创作助手",
+            "profile": "负责检查小说情节是否符合逻辑，是否符合小说创作的规范。",
+            "background": "\n".join(
+                ["## Background"] + [f"{msg.content}" for msg in context_asset]
+            ),
+            "constraints": constraints,
+            "workflow": "",
+            "standard_output": "",
+            "examples": "",
+            "messages": state["draft"],
+            "pre_filled_output": "",
+        }
     )
+    cc_state: CompileCheckState = llm.invoke(prompt.to_messages())
+    if cc_state.status == "fail":
+        return Command(goto="generator", update={"compile_check": cc_state})
+    return Command(goto="lint", update={"verify_content": [draft[-1]]})
 
 
 def lint_node(state: WizardState):

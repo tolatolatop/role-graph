@@ -29,8 +29,9 @@ def create_custom_agent(
         tools_to_use = tools
 
     if not use_tools:
+        if output_model:
+            return llm.with_structured_output(output_model)
         return llm
     if output_model:
         return llm.with_structured_output(output_model, tools=tools_to_use)
-    else:
-        return llm.bind_tools(tools_to_use)
+    return llm.bind_tools(tools_to_use)
