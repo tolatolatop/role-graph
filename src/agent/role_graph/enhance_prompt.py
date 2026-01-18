@@ -241,6 +241,9 @@ class State(MessagesState):
     answers: Annotated[List[str], add_answers] = Field(
         description="答案", default_factory=list
     )
+    re_answers: AIAnswerList = Field(
+        description="重新回答的答案", default=AIAnswerList(answers=[])
+    )
     plan_prompt: str = Field(description="计划提示词", default="")
 
 
@@ -248,13 +251,18 @@ def analyze_user_goal(state: State):
     """Analyze the user goal."""
     llm = create_custom_agent()
     msg = llm.invoke([SystemMessage(content=goal_prompt)] + state["messages"])
-    return {"user_goal": msg.content, "messages": [msg]}
+    return {"user_goal": msg.content}
 
 
 def generate_exam(state: State):
     """Generate an exam."""
     llm = create_custom_agent(Exam)
-    exam: Exam = llm.invoke([SystemMessage(content=exam_prompt)] + state["messages"])
+    exam: Exam = llm.invoke(
+        [SystemMessage(content=exam_prompt)]
+        + [
+            AIMessage(content=state["user_goal"]),
+        ]
+    )
     return {"exam": exam}
 
 
@@ -292,21 +300,31 @@ def test_user_goal(state: State):
         [SystemMessage(content=state["user_goal"])]
         + [
             HumanMessage(content=f"{state['exam']}"),
-            HumanMessage(content="请根据用户目标和考试内容，生成一个答案列表。"),
+            HumanMessage(
+                content="生成一个最接近用户意图的答案列表，不要遗漏任何选项,注意以上题目均为单选题，每个题目只有一个最符合要求的答案"
+            ),
         ]
     )
-    return {"messages": [AIMessage(content=str(answers_list))]}
+    return {"re_answers": answers_list}
 
 
 def compare_answers(state: State) -> Command[Literal[END, "update_user_goal"]]:
     """Compare the answers."""
     llm = create_custom_agent(Diff)
+    diff_info = []
+    for quest, user_answer, re_answer in zip(
+        state["exam"].questions, state["answers"], state["re_answers"].answers
+    ):
+        diff_info.append(
+            f"题目: {quest}\n推测意图: {re_answer}\n用户选择: {user_answer}"
+        )
+
     diff: Diff = llm.invoke(
         [
-            AIMessage(content=f"{state['exam']}"),
-            HumanMessage(content=f"{state['answers']}"),
-            state["messages"][-1],
-            HumanMessage(content="比较用户和AI的答案"),
+            SystemMessage(content="\n".join(diff_info)),
+            HumanMessage(
+                content="根据上述对话内容找出生成答案和参考答案之间的差异，并分析原因，严格按照以下格式指出差异，采用输出形式如下: 用户希望...., 而不是..., 因为...。"
+            ),
         ]
     )
     if diff.is_same:
@@ -323,9 +341,9 @@ def update_user_goal(state: State):
     msg = llm.invoke(
         [SystemMessage(content=goal_prompt)]
         + state["messages"]
-        + [HumanMessage(content="根据提示重新完整生成用户意图")]
+        + [HumanMessage(content="根据差异再次明确用户完整意图")]
     )
-    return {"user_goal": msg.content, "messages": [msg]}
+    return {"user_goal": msg.content}
 
 
 def router_node(
