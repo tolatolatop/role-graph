@@ -180,6 +180,38 @@ meta_prompt = """
 
 """
 
+diff_prompt = """
+# Role
+你是一个高精度的“用户意图校准专家”。你的工作是分析“AI推测意图”与“用户真实选择”之间的差异，并计算出“语义残差”。
+
+# Task
+你将接收一组问卷数据，每组包含：题目、AI推测意图（Shadow）、用户选择（Ground Truth）。
+请执行以下逻辑分析：
+
+1.  **Match Analysis (命中分析)**: 如果用户选择与推测意图一致，将其标记为 [VERIFIED]（已验证）。这意味着该维度的意图是准确的。
+2.  **Gap Analysis (差异分析)**: 如果不一致，你需要计算“语义残差”。
+    * 提取 AI 误判的倾向（Old Vector）。
+    * 提取用户真实的倾向（New Vector）。
+    * 生成一段简短的 **"Correction Logic" (修正逻辑)**，说明为了符合用户选择，意图模型需要做出的具体调整。
+
+# Output Format (JSON)
+请输出一个 JSON 对象，包含两个列表：
+1.  `verified_intents`: 包含所有确认无误的关键特征。
+2.  `semantic_residuals`: 包含所有需要修正的残差项。
+
+## JSON Structure Example:
+{
+  "verified_intents": ["特征A", "特征B"],
+  "semantic_residuals": [
+    {
+      "dimension": "故事重心",
+      "ai_assumption": "AI原本认为...",
+      "user_correction": "用户实际上想要...",
+      "instruction_update": "因此，在生成时应强制..."
+    }
+  ]
+}"""
+
 
 class Question(BaseModel):
     """Question for the agent."""
@@ -222,8 +254,10 @@ class Exam(BaseModel):
 class Diff(BaseModel):
     """Diff for the agent."""
 
-    is_same: bool = Field(description="是否相同")
-    diff_reason: str = Field(description="差异原因")
+    verified_intents: List[str] = Field(
+        description="已验证的意图", default_factory=list
+    )
+    semantic_residuals: List[str] = Field(description="残差意图", default_factory=list)
 
 
 def add_answers(anwsers_left: List[str], anwsers_right: List[str]):
@@ -308,7 +342,7 @@ def test_user_goal(state: State):
     return {"re_answers": answers_list}
 
 
-def compare_answers(state: State) -> Command[Literal[END, "update_user_goal"]]:
+def compare_answers(state: State) -> Command[Literal[END, "test_user_goal"]]:
     """Compare the answers."""
     llm = create_custom_agent(Diff)
     diff_info = []
@@ -321,17 +355,16 @@ def compare_answers(state: State) -> Command[Literal[END, "update_user_goal"]]:
 
     diff: Diff = llm.invoke(
         [
-            SystemMessage(content="\n".join(diff_info)),
-            HumanMessage(
-                content="根据上述对话内容找出生成答案和参考答案之间的差异，并分析原因，严格按照以下格式指出差异，采用输出形式如下: 用户希望...., 而不是..., 因为...。"
-            ),
+            SystemMessage(content=diff_prompt),
+            HumanMessage(content="\n".join(diff_info)),
         ]
     )
-    if diff.is_same:
+    user_goal = state["user_goal"]
+    if len(diff.semantic_residuals) == 0:
         return Command(goto="END")
     return Command(
-        goto="update_user_goal",
-        update={"messages": [HumanMessage(content=f"差异:{diff.diff_reason}")]},
+        goto="test_user_goal",
+        update={"user_goal": user_goal + f"\n{diff.model_dump_json(indent=4)}"},
     )
 
 
