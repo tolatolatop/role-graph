@@ -7,6 +7,8 @@ from langgraph.graph.message import add_messages
 from langgraph.types import Command
 from typing_extensions import Annotated, Literal, TypedDict
 
+from agent.agent import create_custom_agent
+
 
 class CompileCheckState(TypedDict):
     status: Literal["pass", "fail"]
@@ -61,10 +63,10 @@ prompt_template = ChatPromptTemplate.from_messages(
 )
 
 
-def router_condition(state: MessagesState) -> Command[ALL_STAGE]:
+def router_condition(state: WizardState) -> Command[ALL_STAGE]:
     """Router node."""
     if state.get("current_stage") is None:
-        return Command(goto="router")
+        return Command(goto="research", update={"current_stage": "research"})
     elif state["current_stage"] == "router":
         return Command(goto="research")
     elif state["current_stage"] == "research":
@@ -81,36 +83,74 @@ def router_condition(state: MessagesState) -> Command[ALL_STAGE]:
         return Command(goto=END)
 
 
-def research_node(state: MessagesState):
+def research_node(state: WizardState):
     """Research node."""
-    return Command(goto="generator", update={"research": {"status": "pass"}})
+    return {"context_asset": [state.get("messages", [])[-1]]}
 
 
-def generator_node(state: MessagesState):
+def generator_node(state: WizardState):
     """Generate code node."""
     clear_check_state = {
         "compile_check": None,
         "lint_check": None,
         "quality_check": None,
     }
+    llm = create_custom_agent(use_tools=False)
+    user_input = state.get("messages", [])[-1].content
+    prompt = prompt_template.invoke(
+        {
+            "role": "小说创作助手",
+            "profile": "你是一个小说创作助手，你的任务是根据用户的需求创作小说。",
+            "background": "",
+            "constraints": "## Constraints:\n- 你只能输出小说内容，不能输出任何其他内容。",
+            "workflow": "",
+            "standard_output": "",
+            "examples": "",
+            "messages": state.get("published_content", []),
+            "pre_filled_output": user_input,
+        }
+    )
+    msg = llm.invoke(prompt.to_messages())
+    return {
+        "draft": [msg],
+        **clear_check_state,
+    }
+
+
+def compiler_node(state: WizardState) -> Command[Literal["lint", "router"]]:
+    """Compiler node."""
+    draft = state.get("draft", [])
+    if len(draft) == 0:
+        return Command(goto="router", update={"compile_check": {"status": "fail"}})
+
+    msg = draft[-1]
     return Command(
-        goto="compiler", update={"generator": {"status": "pass"}, **clear_check_state}
+        goto="lint",
+        update={"compile_check": {"status": "pass"}, "verify_content": [msg]},
     )
 
 
-def compiler_node(state: MessagesState) -> Command[Literal["lint", "router"]]:
-    """Compiler node."""
-    return Command(goto="lint", update={"compile_check": {"status": "pass"}})
-
-
-def lint_node(state: MessagesState):
+def lint_node(state: WizardState):
     """Lint node."""
-    return Command(goto="quality", update={"lint_check": {"status": "pass"}})
+    verify_content = state.get("verify_content", [])
+    msg = verify_content[-1]
+    return {
+        "published_content": [msg],
+        "lint_check": {"status": "pass"},
+    }
 
 
-def quality_check_node(state: MessagesState):
+def quality_check_node(state: WizardState):
     """Quailty check node."""
-    return Command(goto="router", update={"quality_check": {"status": "pass"}})
+    published_content = state.get("published_content", [])
+    if len(published_content) == 0:
+        return Command(goto="router", update={"quality_check": {"status": "fail"}})
+
+    msg = published_content[-1]
+    return Command(
+        goto="router",
+        update={"quality_check": {"status": "pass"}, "messages": [msg]},
+    )
 
 
 wizard_builder = StateGraph(WizardState)
@@ -122,8 +162,6 @@ wizard_builder.add_node("lint", lint_node)
 wizard_builder.add_node("quality", quality_check_node)
 
 wizard_builder.add_edge(START, "router")
-wizard_builder.add_conditional_edges("router", router_condition)
-wizard_builder.add_edge("router", "research")
 wizard_builder.add_edge("research", "generator")
 wizard_builder.add_edge("generator", "compiler")
 wizard_builder.add_edge("compiler", "lint")
