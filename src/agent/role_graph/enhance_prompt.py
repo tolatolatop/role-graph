@@ -364,11 +364,11 @@ def human_answer(state: State):
 
 def human_answers_loop(
     state: State,
-) -> Command[Literal["human_answer", "test_user_goal"]]:
+) -> Command[Literal["human_answer", "router_node"]]:
     """Human answers loop."""
     if len(state["answers"]) < len(state["exam"].questions):
         return Command(goto="human_answer")
-    return Command(goto="test_user_goal")
+    return Command(goto="router_node")
 
 
 def generate_plan_prompt(state: State):
@@ -417,7 +417,7 @@ def remove_last_re_answer(state: State):
 
 def compare_answers(
     state: State,
-) -> Command[Literal[END, "test_user_goal", "update_user_goal"]]:
+) -> Command[Literal["router_node", "test_user_goal", "update_user_goal"]]:
     """Compare the answers."""
     llm = create_custom_agent(Diff)
     diff_info = get_diff_info(state)
@@ -432,7 +432,7 @@ def compare_answers(
     )
     if diff.status == "PERFECT_MATCH":
         if compare_index == max_index:
-            return Command(goto="END")
+            return Command(goto="router_node")
         else:
             return Command(goto="test_user_goal")
     else:
@@ -458,11 +458,28 @@ def update_user_goal(state: State):
 
 def router_node(
     state: State,
-) -> Command[Literal["analyze_user_goal", "test_user_goal"]]:
+) -> Command[Literal["analyze_user_goal", "test_user_goal", "create_plan_prompt"]]:
     """Router node."""
     if state.get("user_goal") is None:
         return Command(goto="analyze_user_goal")
-    return Command(goto="test_user_goal")
+    if state.get("exam") is not None:
+        re_answers = state.get("re_answers", AIAnswerList(answers=[]))
+        if len(re_answers.answers) == len(state["exam"].questions):
+            return Command(goto="create_plan_prompt")
+        else:
+            return Command(goto="test_re_answers")
+    return Command(goto="test_re_answers")
+
+
+def create_plan_prompt(state: State):
+    """Create a plan prompt."""
+    llm = create_custom_agent()
+    msg = llm.invoke(
+        [SystemMessage(content=meta_prompt)]
+        + state["messages"]
+        + [HumanMessage(content=f"## 用户意图: \n{state['user_goal']}")]
+    )
+    return {"plan_prompt": msg.content, "messages": [msg]}
 
 
 enhance_prompt_builder = StateGraph(State)
@@ -475,6 +492,7 @@ enhance_prompt_builder.add_node("plan_prompt", generate_plan_prompt)
 enhance_prompt_builder.add_node("update_user_goal", update_user_goal)
 enhance_prompt_builder.add_node("test_user_goal", test_user_goal)
 enhance_prompt_builder.add_node("compare_answers", compare_answers)
+enhance_prompt_builder.add_node("create_plan_prompt", create_plan_prompt)
 enhance_prompt_builder.add_edge(START, "router_node")
 enhance_prompt_builder.add_edge("analyze_user_goal", "generate_exam")
 enhance_prompt_builder.add_edge("generate_exam", "human_answers_loop")
@@ -483,6 +501,6 @@ enhance_prompt_builder.add_edge("human_answer", "human_answers_loop")
 enhance_prompt_builder.add_edge("test_user_goal", "compare_answers")
 enhance_prompt_builder.add_conditional_edges("compare_answers", compare_answers)
 enhance_prompt_builder.add_edge("update_user_goal", "test_user_goal")
-enhance_prompt_builder.add_edge("compare_answers", END)
+enhance_prompt_builder.add_edge("create_plan_prompt", END)
 
 graph = enhance_prompt_builder.compile()
