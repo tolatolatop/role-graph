@@ -477,7 +477,11 @@ def create_plan_prompt(state: State):
     msg = llm.invoke(
         [SystemMessage(content=meta_prompt)]
         + state["messages"]
-        + [HumanMessage(content=f"## 用户意图: \n{state['user_goal']}")]
+        + [
+            HumanMessage(
+                content=f"## 用户意图: \n{state['user_goal']} \n --- \n 请根据用户意图生成一个用于创建任务计划的提示词"
+            )
+        ]
     )
     return {"plan_prompt": msg.content, "messages": [msg]}
 
