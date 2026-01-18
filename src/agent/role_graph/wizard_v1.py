@@ -1,6 +1,7 @@
 """Wizard for the agent."""
 
 from langchain.messages import AnyMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import Command
@@ -30,12 +31,34 @@ class WizardState(MessagesState):
     compile_check: CompileCheckState
     lint_check: LintCheckState
     quality_check: QualityCheckState
-    current_state: Literal[
+    current_stage: Literal[
         "router", "research", "generator", "compiler", "lint", "quality"
     ]
 
 
 ALL_STAGE = Literal["research", "generator", "compiler", "lint", "quality", END]
+
+system_prompt_template = """Role: {role}
+Profile: {profile}
+
+{background}
+
+{constraints}
+
+{workflow}
+
+{standard_output}
+
+{examples}
+"""
+
+prompt_template = ChatPromptTemplate.from_messages(
+    [
+        ("system", system_prompt_template),
+        MessagesPlaceholder(variable_name="messages"),
+        ("assistant", "{pre_filled_output}"),
+    ]
+)
 
 
 def router_condition(state: MessagesState) -> Command[ALL_STAGE]:
