@@ -180,37 +180,83 @@ meta_prompt = """
 
 """
 
-diff_prompt = """
+diff_prompt = """# Role
+你是一个严格的逻辑网关（Logic Gateway）。你的任务是处理问卷数据，并执行“异常分流”。
+
+# Input Data
+你将接收多组题目数据，包含：
+1. `Predicted_Intent` (AI推测)
+2. `User_Choice` (用户真实选择)
+
+# Processing Logic (Step-by-Step)
+对于每一道题目，你必须严格按照执行以下 Python 风格的伪代码逻辑推断：
+
+```python
+for item in questions:
+    # 步骤 1: 提取选项标识符 (忽略文本，只看首字母 A, B, C...)
+    ai_letter = extract_letter(item.Predicted_Intent)
+    user_letter = extract_letter(item.User_Choice)
+
+    # 步骤 2: 路由判断
+    if ai_letter == user_letter:
+        # 情况 A: 完全匹配
+        # 动作: 仅添加到 verified_intents 列表
+        # 禁止: 绝对不要在 semantic_residuals 中生成任何内容！
+        verified_intents.append(item.User_Choice)
+    else:
+        # 情况 B: 不匹配 (异常)
+        # 动作: 这是唯一的生成残差的条件
+        residual = {
+            "dimension": extract_topic(item.Question), # 提取题目讨论的核心维度
+            "gap": f"AI推测是 '{item.Predicted_Intent}'，但用户选择了 '{item.User_Choice}'",
+            "fix": f"强制修正意图为: {item.User_Choice}"
+        }
+        semantic_residuals.append(residual)
+
+```
+
+# Constraints (关键约束)
+
+1. **残差列表纯净度**：`semantic_residuals` 数组中，**严禁**出现 `ai_letter == user_letter` 的条目。如果所有题目都匹配，该数组必须为 **Empty List `[]**`。
+2. **拒绝废话**：不要输出 "原本以为是A，实际是A" 这种毫无意义的残差。这属于逻辑错误。
+3. **维度命名**：`dimension` 字段应该是题目的主题（如“写作风格”、“时间背景”），而不是“选项不一致”这种通用描述。
+
+# Output Format (JSON Only)
+
+{
+"status": "ALL_MATCHED" | "HAS_MISMATCH",
+"verified_intents": ["string", "string"],
+"semantic_residuals": [
+// 只有当 AI != User 时，这里才会有对象。
+// 如果 AI == User，这里必须为空。
+]
+}
+"""
+
+answer_prompt = """
 # Role
-你是一个高精度的“用户意图校准专家”。你的工作是分析“AI推测意图”与“用户真实选择”之间的差异，并计算出“语义残差”。
+你是一个精准的单选题答题助手。
 
 # Task
-你将接收一组问卷数据，每组包含：题目、AI推测意图（Shadow）、用户选择（Ground Truth）。
-请执行以下逻辑分析：
+分析用户输入的题目和选项，从中选择最符合题意或用户偏好的一项。
 
-1.  **Match Analysis (命中分析)**: 如果用户选择与推测意图一致，将其标记为 [VERIFIED]（已验证）。这意味着该维度的意图是准确的。
-2.  **Gap Analysis (差异分析)**: 如果不一致，你需要计算“语义残差”。
-    * 提取 AI 误判的倾向（Old Vector）。
-    * 提取用户真实的倾向（New Vector）。
-    * 生成一段简短的 **"Correction Logic" (修正逻辑)**，说明为了符合用户选择，意图模型需要做出的具体调整。
+# Constraints
+1. **唯一性**：输出结果必须严格仅包含选项的字母（如 A）或选项的具体文本内容。
+2. **严禁废话**：严禁输出任何解释、分析、引导语或标点符号。
+3. **鲁棒性**：如果无法确定答案，请输出最可能的选项字母。
 
-# Output Format (JSON)
-请输出一个 JSON 对象，包含两个列表：
-1.  `verified_intents`: 包含所有确认无误的关键特征。
-2.  `semantic_residuals`: 包含所有需要修正的残差项。
+# Workflow
+1. 识别输入的题目背景。
+2. 匹配最合适的选项。
+3. 仅输出选项对应的字母或内容。
 
-## JSON Structure Example:
-{
-  "verified_intents": ["特征A", "特征B"],
-  "semantic_residuals": [
-    {
-      "dimension": "故事重心",
-      "ai_assumption": "AI原本认为...",
-      "user_correction": "用户实际上想要...",
-      "instruction_update": "因此，在生成时应强制..."
-    }
-  ]
-}"""
+# Examples
+输入: 谁是《西游记》的作者？ A.吴承恩 B.罗贯中 C.曹雪芹
+输出: A
+
+输入: 你希望在同人小说中主要集中于哪种创作方向？ A.原创新角色 B.根据原著角色续写情节 C.重新演绎原著故事线
+输出: C
+"""
 
 
 class Question(BaseModel):
@@ -254,6 +300,9 @@ class Exam(BaseModel):
 class Diff(BaseModel):
     """Diff for the agent."""
 
+    status: Literal["PERFECT_MATCH", "SEMANTIC_GAP"] = Field(
+        description="状态", default="SEMANTIC_GAP"
+    )
     verified_intents: List[str] = Field(
         description="已验证的意图", default_factory=list
     )
@@ -279,6 +328,8 @@ class State(MessagesState):
         description="重新回答的答案", default=AIAnswerList(answers=[])
     )
     plan_prompt: str = Field(description="计划提示词", default="")
+
+    diff: Diff | None = Field(description="差异", default=None)
 
 
 def analyze_user_goal(state: State):
@@ -313,11 +364,11 @@ def human_answer(state: State):
 
 def human_answers_loop(
     state: State,
-) -> Command[Literal["human_answer", "update_user_goal"]]:
+) -> Command[Literal["human_answer", "test_user_goal"]]:
     """Human answers loop."""
     if len(state["answers"]) < len(state["exam"].questions):
         return Command(goto="human_answer")
-    return Command(goto="update_user_goal")
+    return Command(goto="test_user_goal")
 
 
 def generate_plan_prompt(state: State):
@@ -329,54 +380,80 @@ def generate_plan_prompt(state: State):
 
 def test_user_goal(state: State):
     """Test the user goal."""
-    llm = create_custom_agent(AIAnswerList)
-    answers_list: AIAnswerList = llm.invoke(
-        [SystemMessage(content=state["user_goal"])]
-        + [
-            HumanMessage(content=f"{state['exam']}"),
-            HumanMessage(
-                content="生成一个最接近用户意图的答案列表，不要遗漏任何选项,注意以上题目均为单选题，每个题目只有一个最符合要求的答案"
-            ),
-        ]
+    llm = create_custom_agent()
+    system_prompt = f"""{answer_prompt}\n\n ## 用户意图: \n{state["user_goal"]}"""
+    re_answers = state.get("re_answers", AIAnswerList(answers=[]))
+    answers_index = len(re_answers.answers)
+    question = state["exam"].questions[answers_index]
+    msg = llm.invoke(
+        [SystemMessage(content=system_prompt), HumanMessage(content=f"{question}")]
     )
-    return {"re_answers": answers_list}
+    re_answers.answers.append(msg.content)
+    return {"re_answers": re_answers}
 
 
-def compare_answers(state: State) -> Command[Literal[END, "test_user_goal"]]:
+def get_diff_info(state: State):
+    """Get the diff info."""
+    compare_index = len(state["re_answers"].answers) - 1
+    question = state["exam"].questions[compare_index]
+    user_answer = state["answers"][compare_index]
+    max_index = len(state["exam"].questions) - 1
+    return {
+        "message": f"""{question}
+原始意图: {state["re_answers"].answers[compare_index]}
+转变为: {user_answer}""",
+        "max_index": max_index,
+        "compare_index": compare_index,
+    }
+
+
+def remove_last_re_answer(state: State):
+    """Remove the last re answer."""
+    re_answers = state.get("re_answers", AIAnswerList(answers=[]))
+    if len(re_answers.answers) > 0:
+        re_answers.answers.pop()
+    return {"re_answers": re_answers}
+
+
+def compare_answers(
+    state: State,
+) -> Command[Literal[END, "test_user_goal", "update_user_goal"]]:
     """Compare the answers."""
     llm = create_custom_agent(Diff)
-    diff_info = []
-    for quest, user_answer, re_answer in zip(
-        state["exam"].questions, state["answers"], state["re_answers"].answers
-    ):
-        diff_info.append(
-            f"题目: {quest}\n推测意图: {re_answer}\n用户选择: {user_answer}"
-        )
+    diff_info = get_diff_info(state)
+    compare_index = diff_info["compare_index"]
+    max_index = diff_info["max_index"]
 
     diff: Diff = llm.invoke(
         [
             SystemMessage(content=diff_prompt),
-            HumanMessage(content="\n".join(diff_info)),
+            HumanMessage(content=diff_info["message"]),
         ]
     )
-    user_goal = state["user_goal"]
-    if len(diff.semantic_residuals) == 0:
-        return Command(goto="END")
-    return Command(
-        goto="test_user_goal",
-        update={"user_goal": user_goal + f"\n{diff.model_dump_json(indent=4)}"},
-    )
+    if diff.status == "PERFECT_MATCH":
+        if compare_index == max_index:
+            return Command(goto="END")
+        else:
+            return Command(goto="test_user_goal")
+    else:
+        return Command(goto="update_user_goal")
 
 
 def update_user_goal(state: State):
     """Update the user goal."""
     llm = create_custom_agent()
+    diff_info = get_diff_info(state)
+    message = diff_info["message"]
     msg = llm.invoke(
-        [SystemMessage(content=goal_prompt)]
-        + state["messages"]
-        + [HumanMessage(content="根据差异再次明确用户完整意图")]
+        [
+            SystemMessage(content=goal_prompt),
+            HumanMessage(
+                content=f"# 原始用户意图: {state['user_goal']}\n\n\n\n## 对齐信息: \n{message}\n --- \n请根据对齐信息重新生成用户意图"
+            ),
+        ]
     )
-    return {"user_goal": msg.content}
+    update_state = remove_last_re_answer(state)
+    return {"user_goal": msg.content, **update_state}
 
 
 def router_node(
@@ -403,9 +480,9 @@ enhance_prompt_builder.add_edge("analyze_user_goal", "generate_exam")
 enhance_prompt_builder.add_edge("generate_exam", "human_answers_loop")
 enhance_prompt_builder.add_conditional_edges("human_answers_loop", human_answers_loop)
 enhance_prompt_builder.add_edge("human_answer", "human_answers_loop")
-enhance_prompt_builder.add_edge("update_user_goal", "test_user_goal")
 enhance_prompt_builder.add_edge("test_user_goal", "compare_answers")
 enhance_prompt_builder.add_conditional_edges("compare_answers", compare_answers)
+enhance_prompt_builder.add_edge("update_user_goal", "test_user_goal")
 enhance_prompt_builder.add_edge("compare_answers", END)
 
 graph = enhance_prompt_builder.compile()
