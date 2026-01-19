@@ -92,7 +92,32 @@ def router_condition(state: WizardState) -> Command[ALL_STAGE]:
 
 def research_node(state: WizardState):
     """Research node."""
-    return {"context_asset": [state.get("messages", [])[-1]]}
+    messages = state.get("messages", [])
+    if len(messages) == 0:
+        return {"context_asset": []}
+
+    user_msg = messages[-1]
+    llm = create_custom_agent(use_tools=False)
+    constraints = """## Constraints:
+- 输出用户需求摘要，不要生成小说正文。
+- 输出应包含：题材/背景、人物/视角、情节目标、风格基调、字数或篇幅要求、禁忌或限制。
+- 信息不足时用“未指定”标注，不要编造事实。
+"""
+    prompt = prompt_template.invoke(
+        {
+            "role": "小说需求分析师",
+            "profile": "负责将用户需求整理为清晰可执行的创作要点。",
+            "background": "## Background\n用户提出了小说创作需求。",
+            "constraints": constraints,
+            "workflow": "",
+            "standard_output": "## 需求摘要\n- 题材/背景：\n- 人物/视角：\n- 情节目标：\n- 风格基调：\n- 篇幅要求：\n- 禁忌/限制：",
+            "examples": "",
+            "messages": [user_msg],
+            "pre_filled_output": "",
+        }
+    )
+    summary_msg = llm.invoke(prompt.to_messages())
+    return {"context_asset": [user_msg, summary_msg]}
 
 
 def generator_node(state: WizardState):
