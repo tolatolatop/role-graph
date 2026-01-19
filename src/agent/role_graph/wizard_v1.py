@@ -1,6 +1,6 @@
 """Wizard for the agent."""
 
-from langchain.messages import AnyMessage
+from langchain.messages import AIMessage, AnyMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.message import add_messages
@@ -24,6 +24,16 @@ class LintCheckState(TypedDict):
 class QualityCheckState(TypedDict):
     status: Literal["pass", "fail"]
     error_messages: Annotated[list[AnyMessage], add_messages]
+
+
+class LintStyleResult(BaseModel):
+    status: Literal["pass", "fail"] = Field(default="pass", description="风格化结果")
+    error_messages: List[str] = Field(default=[], description="风格化失败原因")
+
+
+class QualityCheckResult(BaseModel):
+    status: Literal["pass", "fail"] = Field(default="pass", description="质量检查结果")
+    error_messages: List[str] = Field(default=[], description="质量问题清单")
 
 
 class WizardState(MessagesState):
@@ -154,26 +164,118 @@ def compiler_node(state: WizardState) -> Command[Literal["lint", "router"]]:
     return Command(goto="lint", update={"verify_content": [latest_draft]})
 
 
-def lint_node(state: WizardState):
+def lint_node(state: WizardState) -> Command[Literal["quality", "generator", "router"]]:
     """Lint node."""
     verify_content = state.get("verify_content", [])
-    msg = verify_content[-1]
-    return {
-        "published_content": [msg],
-        "lint_check": {"status": "pass"},
-    }
+    if len(verify_content) == 0:
+        return Command(
+            goto="router",
+            update={
+                "lint_check": {
+                    "status": "fail",
+                    "error_messages": [AIMessage(content="待风格化内容为空")],
+                }
+            },
+        )
+
+    context_asset = state["context_asset"]
+    verify_content = state.get("verify_content", [])
+    latest_verify_content = verify_content[-1]
+    latest_published_content = state.get("published_content", [])[-1]
+    llm = create_custom_agent(use_tools=False, output_model=LintStyleResult)
+    constraints = """## Constraints:
+- 只输出风格化后的小说正文，不输出任何解释。
+- 保证前后内容连贯，不要断开。采用一致的风格。
+- 不新增人物、情节或设定，不改变核心剧情走向。
+- 修正错别字、标点、分段与语气不统一的问题。
+- 语气自然流畅，尽量提升可读性。
+"""
+    prompt = prompt_template.invoke(
+        {
+            "role": "小说风格化编辑",
+            "profile": "负责对小说正文进行风格统一与语言润色。",
+            "background": "\n".join(
+                ["## Background"] + [f"{msg.content}" for msg in context_asset]
+            ),
+            "constraints": constraints,
+            "workflow": "",
+            "standard_output": "",
+            "examples": f"## 参考示例:\n{latest_published_content.content}",
+            "messages": [latest_verify_content],
+            "pre_filled_output": "",
+        }
+    )
+    styled_msg = llm.invoke(prompt.to_messages())
+    return Command(
+        goto="quality",
+        update={
+            "published_content": [styled_msg],
+            "lint_check": {"status": "pass", "error_messages": []},
+        },
+    )
 
 
-def quality_check_node(state: WizardState):
+def quality_check_node(
+    state: WizardState,
+) -> Command[Literal["generator", "router"]]:
     """Quailty check node."""
     published_content = state.get("published_content", [])
+    latest_published_content = published_content[-1]
     if len(published_content) == 0:
-        return Command(goto="router", update={"quality_check": {"status": "fail"}})
+        return Command(
+            goto="router",
+            update={
+                "quality_check": {
+                    "status": "fail",
+                    "error_messages": [AIMessage(content="无可检查的内容")],
+                }
+            },
+        )
 
-    msg = published_content[-1]
+    context_asset = state["context_asset"]
+    published_content = state.get("published_content", [])
+    llm = create_custom_agent(use_tools=False, output_model=QualityCheckResult)
+    constraints = """## Constraints:
+- 按格式要求输出检查结果。
+- 检查结果必须包含：
+  - 检查结果
+  - 质量问题清单（可为空）
+- 重点关注：逻辑一致性、人物动机、情节连贯性与语言质量。
+"""
+    prompt = prompt_template.invoke(
+        {
+            "role": "小说质量审校",
+            "profile": "负责检查小说内容是否符合质量标准与创作规范。",
+            "background": "\n".join(
+                ["## Background"] + [f"{msg.content}" for msg in context_asset]
+            ),
+            "constraints": constraints,
+            "workflow": "",
+            "standard_output": "",
+            "examples": "",
+            "messages": published_content,
+            "pre_filled_output": "",
+        }
+    )
+    qc_state: QualityCheckResult = llm.invoke(prompt.to_messages())
+    if qc_state.status == "fail":
+        error_msg = "\n".join(qc_state.error_messages) or "质量检查未通过"
+        return Command(
+            goto="generator",
+            update={
+                "quality_check": {
+                    "status": "fail",
+                    "error_messages": [AIMessage(content=error_msg)],
+                }
+            },
+        )
+
     return Command(
         goto="router",
-        update={"quality_check": {"status": "pass"}, "messages": [msg]},
+        update={
+            "quality_check": {"status": "pass", "error_messages": []},
+            "messages": [latest_published_content],
+        },
     )
 
 
