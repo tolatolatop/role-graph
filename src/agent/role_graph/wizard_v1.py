@@ -124,6 +124,8 @@ def compiler_node(state: WizardState) -> Command[Literal["lint", "router"]]:
 
     context_asset = state["context_asset"]
     draft = state.get("draft", [])
+    latest_draft = draft[-1]
+    messages = state.get("published_content", []) + [latest_draft]
     llm = create_custom_agent(use_tools=False, output_model=CompileCheckState)
     constraints = """## Constraints:
 - 按格式要求输出检查结果。
@@ -142,14 +144,14 @@ def compiler_node(state: WizardState) -> Command[Literal["lint", "router"]]:
             "workflow": "",
             "standard_output": "",
             "examples": "",
-            "messages": state["draft"],
+            "messages": messages,
             "pre_filled_output": "",
         }
     )
     cc_state: CompileCheckState = llm.invoke(prompt.to_messages())
     if cc_state.status == "fail":
         return Command(goto="generator", update={"compile_check": cc_state})
-    return Command(goto="lint", update={"verify_content": [draft[-1]]})
+    return Command(goto="lint", update={"verify_content": [latest_draft]})
 
 
 def lint_node(state: WizardState):
