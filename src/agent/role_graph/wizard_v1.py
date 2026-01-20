@@ -26,6 +26,19 @@ class QualityCheckState(TypedDict):
     error_messages: Annotated[list[AnyMessage], add_messages]
 
 
+class ResearchResult(BaseModel):
+    summary: str = Field(description="需求摘要")
+    background: str = Field(description="背景")
+    constraints: str = Field(description="硬性检查规定")
+    style: str = Field(description="风格要求")
+    quality: str = Field(description="质量检测方法")
+
+
+class GeneratorResult(BaseModel):
+    draft: str = Field(description="草稿")
+    error_messages: List[str] = Field(default=[], description="错误信息")
+
+
 class LintStyleResult(BaseModel):
     status: Literal["pass", "fail"] = Field(default="pass", description="风格化结果")
     error_messages: List[str] = Field(default=[], description="风格化失败原因")
@@ -37,7 +50,7 @@ class QualityCheckResult(BaseModel):
 
 
 class WizardState(MessagesState):
-    context_asset: Annotated[list[AnyMessage], add_messages]
+    context_asset: list[ResearchResult]
     draft: Annotated[list[AnyMessage], add_messages]
     verify_content: Annotated[list[AnyMessage], add_messages]
     published_content: Annotated[list[AnyMessage], add_messages]
@@ -97,12 +110,8 @@ def research_node(state: WizardState):
         return {"context_asset": []}
 
     user_msg = messages[-1]
-    llm = create_custom_agent(use_tools=False)
-    constraints = """## Constraints:
-- 输出用户需求摘要，不要生成小说正文。
-- 输出应包含：题材/背景、人物/视角、情节目标、风格基调、字数或篇幅要求、禁忌或限制。
-- 信息不足时用“未指定”标注，不要编造事实。
-"""
+    llm = create_custom_agent(use_tools=False, output_model=ResearchResult)
+    constraints = ""
     prompt = prompt_template.invoke(
         {
             "role": "小说需求分析师",
@@ -110,14 +119,14 @@ def research_node(state: WizardState):
             "background": "## Background\n用户提出了小说创作需求。",
             "constraints": constraints,
             "workflow": "",
-            "standard_output": "## 需求摘要\n- 题材/背景：\n- 人物/视角：\n- 情节目标：\n- 风格基调：\n- 篇幅要求：\n- 禁忌/限制：",
+            "standard_output": "",
             "examples": "",
             "messages": [user_msg],
             "pre_filled_output": "",
         }
     )
-    summary_msg = llm.invoke(prompt.to_messages())
-    return {"context_asset": [user_msg, summary_msg]}
+    result: ResearchResult = llm.invoke(prompt.to_messages())
+    return {"context_asset": [result]}
 
 
 def generator_node(state: WizardState):
@@ -134,7 +143,7 @@ def generator_node(state: WizardState):
             "role": "小说创作助手",
             "profile": "你是一个小说创作助手，你的任务是根据用户的需求创作小说。",
             "background": "\n".join(
-                ["## Background"] + [f"{msg.content}" for msg in context_asset]
+                ["## Background"] + [context.background for context in context_asset]
             ),
             "constraints": "## Constraints:\n- 你只能输出小说内容，不能输出任何其他内容。",
             "workflow": "",
@@ -173,7 +182,9 @@ def compiler_node(state: WizardState) -> Command[Literal["lint", "router"]]:
             "role": "小说创作助手",
             "profile": "负责检查小说情节是否符合逻辑，是否符合小说创作的规范。",
             "background": "\n".join(
-                ["## Background"] + [f"{msg.content}" for msg in context_asset]
+                ["## Background"]
+                + [context.background for context in context_asset]
+                + [context.constraints for context in context_asset]
             ),
             "constraints": constraints,
             "workflow": "",
@@ -220,7 +231,7 @@ def lint_node(state: WizardState) -> Command[Literal["quality", "generator", "ro
             "role": "小说风格化编辑",
             "profile": "负责对小说正文进行风格统一与语言润色。",
             "background": "\n".join(
-                ["## Background"] + [f"{msg.content}" for msg in context_asset]
+                ["## Background"] + [context.style for context in context_asset]
             ),
             "constraints": constraints,
             "workflow": "",
@@ -272,7 +283,7 @@ def quality_check_node(
             "role": "小说质量审校",
             "profile": "负责检查小说内容是否符合质量标准与创作规范。",
             "background": "\n".join(
-                ["## Background"] + [f"{msg.content}" for msg in context_asset]
+                ["## Background"] + [context.quality for context in context_asset]
             ),
             "constraints": constraints,
             "workflow": "",
